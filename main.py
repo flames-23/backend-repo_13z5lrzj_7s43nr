@@ -1,6 +1,10 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
+from typing import List
+from database import create_document, get_documents
+from schemas import Subscriber
 
 app = FastAPI()
 
@@ -33,7 +37,6 @@ def test_database():
     }
     
     try:
-        # Try to import database module
         from database import db
         
         if db is not None:
@@ -42,10 +45,9 @@ def test_database():
             response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
             response["connection_status"] = "Connected"
             
-            # Try to list collections to verify connectivity
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = collections[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
                 response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
@@ -57,12 +59,40 @@ def test_database():
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
     
-    # Check environment variables
     import os
     response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
     response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
     
     return response
+
+# Subscriber endpoints
+class SubscribeIn(BaseModel):
+    email: EmailStr
+    source: str | None = None
+    ref: str | None = None
+
+@app.post("/api/subscribe")
+def subscribe(payload: SubscribeIn):
+    try:
+        # Validate via Pydantic (done) and insert into DB
+        sub = Subscriber(email=payload.email, source=payload.source, ref=payload.ref)
+        inserted_id = create_document("subscriber", sub)
+        return {"status": "ok", "id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/subscribers", response_model=List[dict])
+def list_subscribers(limit: int = 50):
+    try:
+        docs = get_documents("subscriber", limit=limit)
+        # Convert ObjectId and datetime to strings for JSON friendliness
+        safe_docs = []
+        for d in docs:
+            d = {k: (str(v) if k == "_id" else v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in d.items()}
+            safe_docs.append(d)
+        return safe_docs
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 if __name__ == "__main__":
